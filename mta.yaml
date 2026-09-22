@@ -7,7 +7,9 @@ modules:
   type: nodejs
   path: gen/srv
   requires:
+  - name: van-stock-profile-auth
   - name: van-stock-profile-db
+  - name: van-stock-profile-destination
   provides:
   - name: srv-api
     properties:
@@ -24,21 +26,57 @@ modules:
   - name: van-stock-profile-db
   parameters:
     buildpack: nodejs_buildpack
-- name: van-stock-profile-app-content
-  type: com.sap.application.content
-  path: .
+- name: van-stock-profile
+  type: approuter.nodejs
+  path: app/router
   requires:
-  - name: van-stock-profile-repo-host
+  - name: srv-api
+    group: destinations
+    properties:
+      forwardAuthToken: true
+      name: srv-api
+      url: ~{srv-url}
+  - name: van-stock-profile-auth
+  - name: van-stock-profile-html5-runtime
+  - name: van-stock-profile-destination
+  provides:
+  - name: app-api
+    properties:
+      app-protocol: ${protocol}
+      app-uri: ${default-uri}
+  parameters:
+    disk-quota: 512M
+    keep-existing-routes: true
+    memory: 256M
+- name: van-stock-profile-app-deployer
+  type: com.sap.application.content
+  path: gen
+  requires:
+  - name: van-stock-profile-auth
+  - name: srv-api
+  - name: van-stock-profile-html5-repo-host
     parameters:
+      config:
+        HTML5Runtime_enabled: true
       content-target: true
+  parameters:
+    config:
+      destinations:
+      - Authentication: NoAuthentication
+        DynamicDestination: true
+        ForwardAuthToken: true
+        Name: srv-api
+        ProxyType: Internet
+        Type: HTTP
+        URL: ~{srv-api/srv-url}
   build-parameters:
-    build-result: resources
+    build-result: app/
     requires:
     - artifacts:
       - comvanstockprofile.zip
-      name: comvanstockprofile
-      target-path: resources/
-- name: comvanstockprofile
+      name: vanstockprofilevanstockprofile
+      target-path: app/
+- name: vanstockprofilevanstockprofile
   type: html5
   path: app/vanstockprofile
   build-parameters:
@@ -48,23 +86,65 @@ modules:
     - npm install
     - npm run build:cf
     supported-platforms: []
+- name: van-stock-profile-destinations
+  type: com.sap.application.content
+  requires:
+  - name: van-stock-profile-auth
+    parameters:
+      service-key:
+        name: van-stock-profile-auth-key
+  - name: van-stock-profile-html5-repo-host
+    parameters:
+      service-key:
+        name: van-stock-profile-html5-repo-host-key
+  - name: srv-api
+  - name: van-stock-profile-destination
+    parameters:
+      content-target: true
+  parameters:
+    content:
+      instance:
+        destinations:
+        - Name: van-stock-profile-html5-repository
+          ServiceInstanceName: van-stock-profile-html5-repo-host
+          ServiceKeyName: van-stock-profile-html5-repo-host-key
+          sap.cloud.service: vanstockprofile.service
+        - Authentication: OAuth2UserTokenExchange
+          Name: van-stock-profile-auth
+          ServiceInstanceName: van-stock-profile-auth
+          ServiceKeyName: van-stock-profile-auth-key
+          sap.cloud.service: vanstockprofile.service
+        existing_destinations_policy: update
+  build-parameters:
+    no-source: true
 resources:
+- name: van-stock-profile-auth
+  type: org.cloudfoundry.managed-service
+  parameters:
+    config:
+      oauth2-configuration:
+        credential-types:
+        - binding-secret
+        - x509
+        redirect-uris:
+        - https://*~{app-api/app-uri}/**
+      tenant-mode: dedicated
+      xsappname: van-stock-profile-${org}-${space}
+    path: ./xs-security.json
+    service: xsuaa
+    service-plan: application
+  requires:
+  - name: app-api
 - name: van-stock-profile-db
   type: com.sap.xs.hdi-container
   parameters:
     service: hana
     service-plan: hdi-shared
-- name: van-stock-profile-repo-host
-  type: org.cloudfoundry.managed-service
-  parameters:
-    service: html5-apps-repo
-    service-name: van-stock-profile-html5-service
-    service-plan: app-host
-- name: van-stock-profile-destination-service
+- name: van-stock-profile-destination
   type: org.cloudfoundry.managed-service
   parameters:
     config:
-      HTML5Runtime_enabled: false
+      HTML5Runtime_enabled: true
       init_data:
         instance:
           destinations:
@@ -74,10 +154,20 @@ resources:
             Type: HTTP
             URL: https://ui5.sap.com
           existing_destinations_policy: update
-      version: 1.0.0
     service: destination
-    service-name: van-stock-profile-destination-service
     service-plan: lite
+  requires:
+  - name: srv-api
+- name: van-stock-profile-html5-repo-host
+  type: org.cloudfoundry.managed-service
+  parameters:
+    service: html5-apps-repo
+    service-plan: app-host
+- name: van-stock-profile-html5-runtime
+  type: org.cloudfoundry.managed-service
+  parameters:
+    service: html5-apps-repo
+    service-plan: app-runtime
 parameters:
   deploy_mode: html5-repo
   enable-parallel-deployments: true
@@ -85,5 +175,5 @@ build-parameters:
   before-all:
   - builder: custom
     commands:
-    - npm ci
+    - npm install
     - npx cds build --production

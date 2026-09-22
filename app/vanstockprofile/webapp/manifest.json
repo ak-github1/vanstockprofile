@@ -24,7 +24,19 @@
         }
       }
     },
-    "title": "UploadLog"
+    "title": "UploadLog",
+    "crossNavigation": {
+      "inbounds": {
+        "vanstockprofile-display": {
+          "semanticObject": "vanstockprofile",
+          "action": "display",
+          "signature": {
+            "parameters": {},
+            "additionalParameters": "allowed"
+          }
+        }
+      }
+    }
   },
   "sap.ui": {
     "technology": "UI5",
@@ -89,7 +101,7 @@
           "target": "VanStockProfileList"
         },
         {
-          "pattern": "VanStockProfile({key}):?query:",
+          "pattern": "ProfileHeader({key}):?query:",
           "name": "VanStockProfileObjectPage",
           "target": "VanStockProfileObjectPage"
         },
@@ -106,10 +118,10 @@
           "name": "sap.fe.templates.ListReport",
           "options": {
             "settings": {
-              "contextPath": "/VanStockProfile",
+              "contextPath": "/ProfileHeader",
               "variantManagement": "Page",
               "navigation": {
-                "VanStockProfile": {
+                "ProfileHeader": {
                   "detail": {
                     "route": "VanStockProfileObjectPage"
                   }
@@ -148,7 +160,7 @@
           "options": {
             "settings": {
               "editableHeaderContent": false,
-              "contextPath": "/VanStockProfile"
+              "contextPath": "/ProfileHeader"
             }
           }
         },
@@ -192,5 +204,9 @@
     "app": {
       "enableLazyLoading": true
     }
+  },
+  "sap.cloud": {
+    "public": true,
+    "service": "vanstockprofile.service"
   }
 }

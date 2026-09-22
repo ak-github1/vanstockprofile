@@ -1,0 +1,12 @@
+{
+  "name": "van-stock-profile-router",
+  "dependencies": {
+    "@sap/approuter": "^16"
+  },
+  "engines": {
+    "node": "^22"
+  },
+  "scripts": {
+    "start": "node node_modules/@sap/approuter/approuter.js"
+  }
+}

@@ -72,3 +72,27 @@ annotate service.VanStockProfile with @(
         },
     ],
 );
+annotate service.ProfileHeader with @(
+    UI.LineItem: [
+        { Value: engineerId,   Label: 'Engineer ID' },
+        { Value: businessUnit, Label: 'Business Unit' },
+        { Value: status,       Label: 'Status' },
+        { Value: dateCreated,  Label: 'Date Created' }
+    ],
+    UI.Facets: [{
+        $Type: 'UI.ReferenceFacet',
+        Label: 'Line Items',
+        Target: 'lines/@UI.LineItem'
+    }],
+);
+
+annotate service.ProfileLine with @(
+    UI.LineItem: [
+        { Value: partNumber,    Label: 'Part Number' },
+        { Value: productGroup,  Label: 'Product Group' },
+        { Value: productStatus, Label: 'Status' },
+        { Value: quantity,      Label: 'Quantity' },
+        { Value: baseUOM,       Label: 'UOM' },
+        { Value: value,         Label: 'Value' }
+    ]
+);

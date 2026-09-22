@@ -2,6 +2,7 @@ const cds = require("@sap/cds");
 const ExcelJS = require('exceljs');
 const { Readable } = require('stream');
 const { loadLookups, validateRow } = require('./lib/validation');
+const { upsertProfileLine } = require('./lib/profileWriter');
 
 const RESULT_SET_SIZE = 10000; // collect exactly this many rows before processing
 
@@ -15,7 +16,7 @@ const RESULT_SET_SIZE = 10000; // collect exactly this many rows before processi
  * (max 10,000 rows) exists at any given moment.
  */
 //uploading data first to upload log table and then on button click upload to main table
-async function processExcelStream(buffer, oLookups, UploadLog, sUploadedBy) {
+async function processExcelStream(buffer, oLookups, UploadLog, ProfileHeader, ProfileLine, ChangeLog, sUploadedBy) {
     const oStream = Readable.from(buffer);
 
     const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(oStream, {
@@ -65,6 +66,16 @@ async function processExcelStream(buffer, oLookups, UploadLog, sUploadedBy) {
 
             if (oResult.isValid) {
                 iSuccessCount++;
+                await upsertProfileLine({
+                    ProfileHeader, ProfileLine, ChangeLog,
+                    engineerId: String(engineerId),
+                    businessUnit: String(profitCenter),
+                    productGroup: '', productStatus: '',
+                    partNumber: String(partNumber),
+                    quantity: Number(quantity), baseUOM: '',
+                    value: Number(value),
+                    userId: sUploadedBy
+                });
             } else {
                 iFailCount++;
             }
@@ -99,7 +110,7 @@ async function processExcelStream(buffer, oLookups, UploadLog, sUploadedBy) {
 
 //uploading data directly to main vanstock table and upload log table using batch
 
-async function processExcelFullStream(buffer, oLookups, UploadLog, VanStockProfile, sUploadedBy) {
+async function processExcelFullStream(buffer, oLookups, UploadLog, ProfileHeader, ProfileLine, ChangeLog, sUploadedBy) {
     const oStream = Readable.from(buffer);
 
     const workbookReader = new ExcelJS.stream.xlsx.WorkbookReader(oStream, {
@@ -115,17 +126,17 @@ async function processExcelFullStream(buffer, oLookups, UploadLog, VanStockProfi
     const dUploadedOn = new Date();
 
     let aLogResultSet = [];
-    let aProfileResultSet = [];
+    //let aProfileResultSet = [];removed — no longer batching into flat table
 
     async function flushResultSets() {
         if (aLogResultSet.length > 0) {
             await INSERT.into(UploadLog).entries(aLogResultSet);
             aLogResultSet = [];
         }
-        if (aProfileResultSet.length > 0) {
-            await INSERT.into(VanStockProfile).entries(aProfileResultSet);
-            aProfileResultSet = [];
-        }
+        // if (aProfileResultSet.length > 0) {
+        //     await INSERT.into(VanStockProfile).entries(aProfileResultSet);
+        //     aProfileResultSet = [];
+        // }
     }
 
     for await (const worksheetReader of workbookReader) {
@@ -153,6 +164,16 @@ async function processExcelFullStream(buffer, oLookups, UploadLog, VanStockProfi
 
             if (oResult.isValid) {
                 iSuccessCount++;
+                 await upsertProfileLine({
+                    ProfileHeader, ProfileLine, ChangeLog,
+                    engineerId: String(engineerId),
+                    businessUnit: String(profitCenter),
+                    productGroup: '', productStatus: '',
+                    partNumber: String(partNumber),
+                    quantity: Number(quantity), baseUOM: '',
+                    value: Number(value),
+                    userId: sUploadedBy
+                });
             } else {
                 iFailCount++;
             }
@@ -172,17 +193,17 @@ async function processExcelFullStream(buffer, oLookups, UploadLog, VanStockProfi
                 posted: oResult.isValid
             });
 
-            if (oResult.isValid) {
-                aProfileResultSet.push({
-                    ID: cds.utils.uuid(),
-                    createdOn: new Date(),
-                    engineerId: String(engineerId),
-                    profitCenter: String(profitCenter),
-                    partNumber: String(partNumber),
-                    quantity: Number(quantity),
-                    value: Number(value)
-                });
-            }
+            // if (oResult.isValid) {
+            //     aProfileResultSet.push({
+            //         ID: cds.utils.uuid(),
+            //         createdOn: new Date(),
+            //         engineerId: String(engineerId),
+            //         profitCenter: String(profitCenter),
+            //         partNumber: String(partNumber),
+            //         quantity: Number(quantity),
+            //         value: Number(value)
+            //     });
+            // }
 
             iTotalRows++;
 
@@ -199,7 +220,8 @@ async function processExcelFullStream(buffer, oLookups, UploadLog, VanStockProfi
 
 
 module.exports = cds.service.impl(function () {
-    const { VanStockProfile, UploadLog } = this.entities;
+    const { VanStockProfile, UploadLog, ProfileHeader, ProfileLine, ChangeLog, ArchiveHeader, ArchiveLine } = this.entities;
+    // const { VanStockProfile, UploadLog } = this.entities;
     //commented code without batchId
     this.on('uploadProfile', (req) => {
         const { file } = req.data;
@@ -221,7 +243,7 @@ module.exports = cds.service.impl(function () {
 
         return loadLookups()
             .then((oLookups) => {
-                return processExcelStream(buffer, oLookups, UploadLog, sUploadedBy);
+                return processExcelStream(buffer, oLookups, UploadLog, ProfileHeader, ProfileLine, ChangeLog, sUploadedBy);
             })
             .then((oSummary) => {
                 if (oSummary.iTotalRows === 0) {
@@ -258,8 +280,8 @@ module.exports = cds.service.impl(function () {
 
         const sUploadedBy = req.user ? req.user.id : 'unknown';
 
-        return loadLookups()
-            .then((oLookups) => processExcelFullStream(buffer, oLookups, UploadLog, VanStockProfile, sUploadedBy))
+       return loadLookups()
+    .then((oLookups) => processExcelFullStream(buffer, oLookups, UploadLog, ProfileHeader, ProfileLine, ChangeLog, sUploadedBy))
             .then((oSummary) => {
                 if (oSummary.iTotalRows === 0) {
                     req.error(400, 'Excel file does not contain any data rows');
@@ -276,75 +298,76 @@ module.exports = cds.service.impl(function () {
                 req.error(500, `Upload failed: ${oError.message}`);
             });
     });
-    this.on('postProfiles', (req) => {
-        const { logIds } = req.data;
+  this.on('postProfiles', async (req) => {
+    const { logIds } = req.data;
 
-        if (!logIds || logIds.length === 0) {
-            req.error(400, "No rows selected to post");
-            return Promise.resolve();
+    if (!logIds || logIds.length === 0) {
+        req.error(400, "No rows selected to post");
+        return;
+    }
+
+    try {
+        const aSelectedLogs = await SELECT.from(UploadLog).where({ ID: { in: logIds } });
+
+        const aAlreadyPosted = aSelectedLogs.filter(e => e.posted);
+        const aFailedRows = aSelectedLogs.filter(e => e.status !== 'Success');
+        const aToPost = aSelectedLogs.filter(e => e.status === 'Success' && !e.posted);
+
+        if (aAlreadyPosted.length > 0) {
+            req.error(400, `${aAlreadyPosted.length} selected row(s) were already posted`);
+            return;
+        }
+        if (aFailedRows.length > 0) {
+            req.error(400, `${aFailedRows.length} selected row(s) failed validation and cannot be posted`);
+            return;
+        }
+        if (aToPost.length === 0) {
+            req.error(400, "No valid rows to post");
+            return;
         }
 
-        return SELECT.from(UploadLog).where({ ID: { in: logIds } })
-            .then((aSelectedLogs) => {
-                const aAlreadyPosted = aSelectedLogs.filter(e => e.posted);
-                const aFailedRows = aSelectedLogs.filter(e => e.status !== 'Success');
-                const aToPost = aSelectedLogs.filter(e => e.status === 'Success' && !e.posted);
-
-                if (aAlreadyPosted.length > 0) {
-                    return Promise.reject(new Error(`${aAlreadyPosted.length} selected row(s) were already posted`));
-                }
-                if (aFailedRows.length > 0) {
-                    return Promise.reject(new Error(`${aFailedRows.length} selected row(s) failed validation and cannot be posted`));
-                }
-                if (aToPost.length === 0) {
-                    return Promise.reject(new Error("No valid rows to post"));
-                }
-
-                const aProfilesToInsert = aToPost.map((oLog) => ({
-                    ID: cds.utils.uuid(),
-                    createdOn: new Date(),
-                    engineerId: oLog.engineerId,
-                    profitCenter: oLog.profitCenter,
-                    partNumber: oLog.partNumber,
-                    quantity: oLog.quantity,
-                    value: oLog.value
-                }));
-
-                const BATCH_SIZE = 10000;
-                let pChain = Promise.resolve();
-                for (let i = 0; i < aProfilesToInsert.length; i += BATCH_SIZE) {
-                    const batch = aProfilesToInsert.slice(i, i + BATCH_SIZE);
-                    pChain = pChain.then(() => INSERT.into(VanStockProfile).entries(batch));
-                }
-
-                return pChain
-                    .then(() => UPDATE(UploadLog).set({ posted: true }).where({ ID: { in: aToPost.map(e => e.ID) } }))
-                    .then(() => ({
-                        message: `${aToPost.length} record(s) posted to Van Stock Profile`,
-                        postedCount: aToPost.length
-                    }));
-            })
-            .catch((oError) => {
-                req.error(400, oError.message);
+        for (const oLog of aToPost) {
+            await upsertProfileLine({
+                ProfileHeader, ProfileLine, ChangeLog,
+                engineerId: oLog.engineerId,
+                businessUnit: oLog.profitCenter,
+                productGroup: '', productStatus: '',
+                partNumber: oLog.partNumber,
+                quantity: oLog.quantity, baseUOM: '',
+                value: oLog.value,
+                userId: req.user ? req.user.id : 'unknown'
             });
-    });
+        }
 
-    this.on('uploadProfileChunk', (req) => {
+        await UPDATE(UploadLog).set({ posted: true }).where({ ID: { in: aToPost.map(e => e.ID) } });
+
+        return {
+            message: `${aToPost.length} record(s) posted to Van Stock Profile`,
+            postedCount: aToPost.length
+        };
+    } catch (oError) {
+        req.error(400, oError.message);
+    }
+});
+    this.on('uploadProfileChunk', async (req) => {
         const { rows } = req.data;
 
         if (!rows || rows.length === 0) {
             req.error(400, "No rows provided");
-            return Promise.resolve();
+            return;
         }
 
         const sUploadedBy = req.user ? req.user.id : 'unknown';
         const dUploadedOn = new Date();
 
-        return loadLookups().then((oLookups) => {
-            const aLogEntries = rows.map((oRawRow) => {
+        try {
+            const oLookups = await loadLookups();
+            const aLogEntries = [];
+
+            for (const oRawRow of rows) {
                 const oResult = validateRow(oRawRow, oLookups);
 
-                return {
+                aLogEntries.push({
                     ID: cds.utils.uuid(),
                     uploadedOn: dUploadedOn,
                     uploadedBy: sUploadedBy,
@@ -356,61 +379,72 @@ module.exports = cds.service.impl(function () {
                     value: oRawRow.value,
                     status: oResult.isValid ? 'Success' : 'Failed',
                     remark: oResult.isValid ? '' : oResult.errors.join('; '),
-                    posted: false
-                };
-            });
+                    posted: oResult.isValid
+                });
 
-            return INSERT.into(UploadLog).entries(aLogEntries).then(() => {
-                const iSuccessCount = aLogEntries.filter(e => e.status === 'Success').length;
-                return {
-                    successCount: iSuccessCount,
-                    failCount: aLogEntries.length - iSuccessCount
-                };
-            });
-        }).catch((oError) => {
+                if (oResult.isValid) {
+                    await upsertProfileLine({
+                        ProfileHeader, ProfileLine, ChangeLog,
+                        engineerId: oRawRow.engineerId,
+                        businessUnit: oRawRow.profitCenter,
+                        productGroup: '',
+                        productStatus: '',
+                        partNumber: oRawRow.partNumber,
+                        quantity: oRawRow.quantity,
+                        baseUOM: '',
+                        value: oRawRow.value,
+                        userId: sUploadedBy
+                    });
+                }
+            }
+
+            await INSERT.into(UploadLog).entries(aLogEntries);
+
+            const iSuccessCount = aLogEntries.filter(e => e.status === 'Success').length;
+            return {
+                successCount: iSuccessCount,
+                failCount: aLogEntries.length - iSuccessCount
+            };
+        } catch (oError) {
             req.error(500, `Chunk upload failed: ${oError.message}`);
-        });
+        }
     });
 
     // ============================
     // NEW — Post ALL unposted successful rows at once, no manual selection
     // (avoids the 200-item UI selection limit at large scale)
     // ============================
-    this.on('postAllProfiles', (req) => {
-        return SELECT.from(UploadLog).where({ status: 'Success', posted: false })
-            .then((aToPost) => {
-                if (aToPost.length === 0) {
-                    return { message: "No unposted successful rows found", postedCount: 0 };
-                }
+   this.on('postAllProfiles', async (req) => {
+    try {
+        const aToPost = await SELECT.from(UploadLog).where({ status: 'Success', posted: false });
 
-                const aProfilesToInsert = aToPost.map((oLog) => ({
-                    ID: cds.utils.uuid(),
-                    createdOn: new Date(),
-                    engineerId: oLog.engineerId,
-                    profitCenter: oLog.profitCenter,
-                    partNumber: oLog.partNumber,
-                    quantity: oLog.quantity,
-                    value: oLog.value
-                }));
+        if (aToPost.length === 0) {
+            return { message: "No unposted successful rows found", postedCount: 0 };
+        }
 
-                const BATCH_SIZE = 5000;
-                let pChain = Promise.resolve();
-                for (let i = 0; i < aProfilesToInsert.length; i += BATCH_SIZE) {
-                    const batch = aProfilesToInsert.slice(i, i + BATCH_SIZE);
-                    pChain = pChain.then(() => INSERT.into(VanStockProfile).entries(batch));
-                }
-
-                return pChain
-                    .then(() => UPDATE(UploadLog).set({ posted: true }).where({ status: 'Success', posted: false }))
-                    .then(() => ({
-                        message: `${aToPost.length} record(s) posted to Van Stock Profile`,
-                        postedCount: aToPost.length
-                    }));
-            })
-            .catch((oError) => {
-                req.error(500, `Post all failed: ${oError.message}`);
+        for (const oLog of aToPost) {
+            await upsertProfileLine({
+                ProfileHeader, ProfileLine, ChangeLog,
+                engineerId: oLog.engineerId,
+                businessUnit: oLog.profitCenter,
+                productGroup: '', productStatus: '',
+                partNumber: oLog.partNumber,
+                quantity: oLog.quantity, baseUOM: '',
+                value: oLog.value,
+                userId: req.user ? req.user.id : 'unknown'
             });
-    });
+        }
+
+        await UPDATE(UploadLog).set({ posted: true }).where({ status: 'Success', posted: false });
+
+        return {
+            message: `${aToPost.length} record(s) posted to Van Stock Profile`,
+            postedCount: aToPost.length
+        };
+    } catch (oError) {
+        req.error(500, `Post all failed: ${oError.message}`);
+    }
+});
     //Procedure
     this.on('uploadProfileChunkViaProcedure', (req) => {
         const { rows } = req.data;
@@ -458,5 +492,96 @@ module.exports = cds.service.impl(function () {
         }).catch((oError) => {
             req.error(500, `Procedure chunk upload failed: ${oError.message}`);
         });
+    });
+    //Process Return
+    this.on('processReturn', async (req) => {
+        const { engineerId, partNumber, quantity } = req.data;
+        const sUserId = req.user ? req.user.id : 'unknown';
+
+        const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+        if (!oHeader) {
+            req.error(400, `No profile found for engineer ${engineerId}`);
+            return;
+        }
+
+        const oLine = await SELECT.one.from(ProfileLine)
+            .where({ header_ID: oHeader.ID, partNumber });
+
+        if (!oLine) {
+            req.error(400, `Part ${partNumber} not found in engineer ${engineerId}'s inventory`);
+            return;
+        }
+
+        const nNewQty = Number(oLine.quantity) - Number(quantity);
+        if (nNewQty < 0) {
+            req.error(400, `Return would result in negative quantity for part ${partNumber}`);
+            return;
+        }
+
+        const dNow = new Date();
+        await UPDATE(ProfileLine).set({ quantity: nNewQty }).where({ ID: oLine.ID });
+
+        await INSERT.into(ChangeLog).entries({
+            ID: cds.utils.uuid(),
+            changeDate: dNow.toISOString().slice(0, 10),
+            changeTime: dNow.toISOString().slice(11, 19),
+            userId: sUserId, engineerId, transactionType: 'RE',
+            beforePartNumber: partNumber, beforeQuantity: oLine.quantity,
+            afterPartNumber: partNumber, afterQuantity: nNewQty
+        });
+
+        return { message: `Returned ${quantity} of ${partNumber} for ${engineerId}` };
+    });
+
+    this.on('processLeaver', async (req) => {
+        const { engineerId } = req.data;
+        const sUserId = req.user ? req.user.id : 'unknown';
+
+        const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+        if (!oHeader) {
+            req.error(400, `No profile found for engineer ${engineerId}`);
+            return;
+        }
+
+        const aLines = await SELECT.from(ProfileLine).where({ header_ID: oHeader.ID });
+        const dNow = new Date();
+        const sDate = dNow.toISOString().slice(0, 10);
+        const sTime = dNow.toISOString().slice(11, 19);
+
+        await UPDATE(ProfileHeader).set({ status: 'Leaver' }).where({ ID: oHeader.ID });
+
+        const sArchiveId = cds.utils.uuid();
+        await INSERT.into(ArchiveHeader).entries({
+            ID: sArchiveId,
+            dateArchived: sDate, timeArchived: sTime,
+            dateCreated: oHeader.dateCreated, engineerId,
+            businessUnit: oHeader.businessUnit, status: 'Leaver'
+        });
+
+        for (const oLine of aLines) {
+            await INSERT.into(ArchiveLine).entries({
+                ID: cds.utils.uuid(),
+                archiveHeader_ID: sArchiveId,
+                productGroup: oLine.productGroup, productStatus: oLine.productStatus,
+                partNumber: oLine.partNumber, quantity: oLine.quantity,
+                baseUOM: oLine.baseUOM, value: oLine.value
+            });
+        }
+
+        for (const oLine of aLines) {
+            await UPDATE(ProfileLine).set({ quantity: 0, value: 0 }).where({ ID: oLine.ID });
+
+            await INSERT.into(ChangeLog).entries({
+                ID: cds.utils.uuid(),
+                changeDate: sDate, changeTime: sTime, userId: sUserId, engineerId,
+                transactionType: 'LV',
+                beforePartNumber: oLine.partNumber, beforeQuantity: oLine.quantity, beforeValue: oLine.value,
+                afterPartNumber: oLine.partNumber, afterQuantity: 0, afterValue: 0
+            });
+        }
+
+        await UPDATE(ProfileHeader).set({ status: 'Closed' }).where({ ID: oHeader.ID });
+
+        return { message: `Engineer ${engineerId} processed as leaver, profile archived and closed` };
     });
 });

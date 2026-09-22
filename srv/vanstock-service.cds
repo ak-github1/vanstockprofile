@@ -1,24 +1,38 @@
 using {vanstock} from '../db/schema';
+using from '../db/vanstock-header';
+using from '../db/vanstock-changelog';
+using from '../db/vanstock-archive';
 using from '../db/uploadlog';
 
 service VanStockProfile {
-    entity VanStockProfile    as projection on vanstock.VanStockProfiles;
-    entity UploadLog          as projection on vanstock.UploadLogs;
-   
+    entity VanStockProfile as projection on vanstock.VanStockProfiles;
+    entity UploadLog       as projection on vanstock.UploadLogs;
+    entity ProfileHeader   as projection on vanstock.VanStockProfileHeader;
+    entity ProfileLine     as projection on vanstock.VanStockProfileLine;
+    entity ChangeLog       as projection on vanstock.ChangeLogs;
+    entity ArchiveHeader   as projection on vanstock.ArchiveHeaders;
+    entity ArchiveLine     as projection on vanstock.ArchiveLines;
 
-    action uploadProfile(file: LargeBinary, mimetype: String) returns {
+    action processReturn(
+        engineerId: String, partNumber: String, quantity: Decimal
+    ) returns { message: String };
+
+    action processLeaver(engineerId: String) returns { message: String };
+    
+    action uploadProfile(file: LargeBinary, mimetype: String)         returns {
         message      : String;
         totalRows    : Integer;
         successCount : Integer;
         failCount    : Integer;
     };
-    
-action uploadProfileFull(file: LargeBinary, mimetype: String) returns {
-    message      : String;
-    totalRows    : Integer;
-    successCount : Integer;
-    failCount    : Integer;
-};
+
+    action uploadProfileFull(file: LargeBinary, mimetype: String)     returns {
+        message      : String;
+        totalRows    : Integer;
+        successCount : Integer;
+        failCount    : Integer;
+    };
+
     action postProfiles(logIds: array of UUID)                        returns {
         message     : String;
         postedCount : Integer;
