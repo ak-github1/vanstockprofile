@@ -114,7 +114,7 @@
 					"target": "VanStockProfileList"
 				},
 				{
-					"pattern": "VanStockProfile({key}):?query:",
+					"pattern": "ProfileHeader({key}):?query:",
 					"name": "VanStockProfileObjectPage",
 					"target": "VanStockProfileObjectPage"
 				},
@@ -131,10 +131,10 @@
 					"name": "sap.fe.templates.ListReport",
 					"options": {
 						"settings": {
-							"contextPath": "/VanStockProfile",
+							"contextPath": "/ProfileHeader",
 							"variantManagement": "Page",
 							"navigation": {
-								"VanStockProfile": {
+								"ProfileHeader": {
 									"detail": {
 										"route": "VanStockProfileObjectPage"
 									}
@@ -173,7 +173,7 @@
 					"options": {
 						"settings": {
 							"editableHeaderContent": false,
-							"contextPath": "/VanStockProfile"
+							"contextPath": "/ProfileHeader"
 						}
 					}
 				},

@@ -94,7 +94,7 @@ sap.ui.define([
     function findModelAndComponent() {
         var oModel = null;
         var oComponent = null;
-        sap.ui.core.Component.registry.forEach(function (oComp) {           
+        sap.ui.core.Component.registry.forEach(function (oComp) {
             if (!oComponent && oComp.getManifestEntry) {
                 var oAppInfo = oComp.getManifestEntry("sap.app");
                 if (oAppInfo && oAppInfo.id === "com.vanstockprofile") {
@@ -134,6 +134,49 @@ sap.ui.define([
                     MessageToast.show("Could not find OData model on control");
                     return;
                 }
+                // ADD THIS — scenario detection
+                var oReturnRadio = Fragment.byId(sFragmentId, "returnScenarioRadio");
+                var oLeaverRadio = Fragment.byId(sFragmentId, "leaverScenarioRadio");
+                var bReturn = !!(oReturnRadio && oReturnRadio.getSelected());
+                var bLeaver = !!(oLeaverRadio && oLeaverRadio.getSelected());
+
+                if (bReturn || bLeaver) {
+                    var dStart2 = Date.now();
+                    oDialog.setBusy(true);
+                    oDialog.setBusyIndicatorDelay(0);
+                    var fnParse = bReturn ? parseReturnFile : parseLeaverFile;
+                    var sBulkAction = bReturn ? "processReturnBulk" : "processLeaverBulk";
+                    var sLabel = bReturn ? "Return" : "Leaver";
+
+                    fnParse(oFile).then(function (aAllRows) {
+                        return sendRows(oFound.oModel, sBulkAction, aAllRows, "[" + sLabel + "] ", false);
+                    }).then(function (oSummary) {
+                        oDialog.setBusy(false);
+                        oSelectedFile = null;
+                        oDialog.close();
+                        MessageBox.success(
+                            oSummary.successCount + " row(s) processed, " + oSummary.failCount + " row(s) failed.",
+                            {
+                                title: sLabel + " Processing Complete",
+                                onClose: function () {
+                                    if (oFound.oComponent && oFound.oComponent.getRouter) {
+                                        oFound.oComponent.getRouter().navTo("UploadLogList");
+                                    }
+                                }
+                            }
+                        );
+                    }).catch(function (oError) {
+                        oDialog.setBusy(false);
+                        if (oError && oError.message === "NO_ROWS") {
+                            MessageBox.warning("No data rows found in the file");
+                        } else {
+                            MessageBox.error((oError && oError.message) || "Unknown error", { title: sLabel + " Failed" });
+                        }
+                    });
+                    return; // stop here — don't fall through to the existing New/Addition logic below
+                }
+                // END ADD
+                
 
                 var oNoChunkRadio = Fragment.byId(sFragmentId, "noChunkModeRadio");
                 var oFullStreamRadio = Fragment.byId(sFragmentId, "fullStreamModeRadio");
@@ -255,7 +298,47 @@ sap.ui.define([
             });
         };
     }
+    function parseReturnFile(oFile) {
+        return oFile.arrayBuffer().then(function (arrayBuffer) {
+            var workbook = new ExcelJS.Workbook();
+            return workbook.xlsx.load(arrayBuffer);
+        }).then(function (workbook) {
+            var worksheet = workbook.worksheets[0];
+            var aAllRows = [];
+            worksheet.eachRow(function (row, rowNumber) {
+                if (rowNumber === 1) return;
+                var engineerId = row.getCell(1).value;
+                var partNumber = row.getCell(2).value;
+                var quantity = row.getCell(3).value;
+                if (!engineerId && !partNumber && !quantity) return;
+                aAllRows.push({
+                    engineerId: engineerId ? String(engineerId) : null,
+                    partNumber: partNumber ? String(partNumber) : null,
+                    quantity: isNaN(Number(quantity)) ? null : Number(quantity)
+                });
+            });
+            if (aAllRows.length === 0) return Promise.reject(new Error("NO_ROWS"));
+            return aAllRows;
+        });
+    }
 
+    function parseLeaverFile(oFile) {
+        return oFile.arrayBuffer().then(function (arrayBuffer) {
+            var workbook = new ExcelJS.Workbook();
+            return workbook.xlsx.load(arrayBuffer);
+        }).then(function (workbook) {
+            var worksheet = workbook.worksheets[0];
+            var aAllRows = [];
+            worksheet.eachRow(function (row, rowNumber) {
+                if (rowNumber === 1) return;
+                var engineerId = row.getCell(1).value;
+                if (!engineerId) return;
+                aAllRows.push({ engineerId: String(engineerId) });
+            });
+            if (aAllRows.length === 0) return Promise.reject(new Error("NO_ROWS"));
+            return aAllRows;
+        });
+    }
     // Both flows now get the same radio choice (chunk vs. no-chunk)
     var openNodeJsUploadDialog = createUploadFlow("excelUploadFragment", "uploadProfileChunk", "");
     var openProcedureUploadDialog = createUploadFlow("excelUploadFragmentProc", "uploadProfileChunkViaProcedure", "[Procedure] ");

@@ -7,6 +7,7 @@ using from '../db/uploadlog';
 service VanStockProfile {
     entity VanStockProfile as projection on vanstock.VanStockProfiles;
     entity UploadLog       as projection on vanstock.UploadLogs;
+    @odata.draft.enabled
     entity ProfileHeader   as projection on vanstock.VanStockProfileHeader;
     entity ProfileLine     as projection on vanstock.VanStockProfileLine;
     entity ChangeLog       as projection on vanstock.ChangeLogs;
@@ -62,5 +63,25 @@ service VanStockProfile {
         successCount : Integer;
         failCount    : Integer;
     };
+type ReturnRow {
+    engineerId : String(20);
+    partNumber : String(40);
+    quantity   : Decimal(13, 3);
+};
 
+type LeaverRow {
+    engineerId : String(20);
+};
+
+action processReturnBulk(rows: array of ReturnRow) returns {
+    successCount : Integer;
+    failCount    : Integer;
+    errors       : array of String;
+};
+
+action processLeaverBulk(rows: array of LeaverRow) returns {
+    successCount : Integer;
+    failCount    : Integer;
+    errors       : array of String;
+};
 };

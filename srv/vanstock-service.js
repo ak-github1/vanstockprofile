@@ -3,6 +3,7 @@ const ExcelJS = require('exceljs');
 const { Readable } = require('stream');
 const { loadLookups, validateRow } = require('./lib/validation');
 const { upsertProfileLine } = require('./lib/profileWriter');
+const { debug } = require("console");
 
 const RESULT_SET_SIZE = 10000; // collect exactly this many rows before processing
 
@@ -164,7 +165,7 @@ async function processExcelFullStream(buffer, oLookups, UploadLog, ProfileHeader
 
             if (oResult.isValid) {
                 iSuccessCount++;
-                 await upsertProfileLine({
+                await upsertProfileLine({
                     ProfileHeader, ProfileLine, ChangeLog,
                     engineerId: String(engineerId),
                     businessUnit: String(profitCenter),
@@ -216,6 +217,58 @@ async function processExcelFullStream(buffer, oLookups, UploadLog, ProfileHeader
     await flushResultSets();
 
     return { iTotalRows, iSuccessCount, iFailCount };
+}
+//leaver and return
+// WITH THIS (same behavior for the single-row actions, refactored into shared functions, plus new bulk handlers):
+
+async function doProcessReturn({ ProfileHeader, ProfileLine, ChangeLog }, engineerId, partNumber, quantity, sUserId) {
+    const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+    if (!oHeader) return { ok: false, error: `No profile found for engineer ${engineerId}` };
+    const oLine = await SELECT.one.from(ProfileLine).where({ header_ID: oHeader.ID, partNumber });
+    if (!oLine) return { ok: false, error: `Part ${partNumber} not found in engineer ${engineerId}'s inventory` };
+    const nNewQty = Number(oLine.quantity) - Number(quantity);
+    if (nNewQty < 0) return { ok: false, error: `Return would result in negative quantity for part ${partNumber} (engineer ${engineerId})` };
+    const dNow = new Date();
+    await UPDATE(ProfileLine).set({ quantity: nNewQty }).where({ ID: oLine.ID });
+    await INSERT.into(ChangeLog).entries({
+        ID: cds.utils.uuid(), changeDate: dNow.toISOString().slice(0, 10), changeTime: dNow.toISOString().slice(11, 19),
+        userId: sUserId, engineerId, transactionType: 'RE',
+        beforePartNumber: partNumber, beforeQuantity: oLine.quantity, afterPartNumber: partNumber, afterQuantity: nNewQty
+    });
+    return { ok: true, message: `Returned ${quantity} of ${partNumber} for ${engineerId}` };
+}
+
+async function doProcessLeaver({ ProfileHeader, ProfileLine, ChangeLog, ArchiveHeader, ArchiveLine }, engineerId, sUserId) {
+    const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+    if (!oHeader) return { ok: false, error: `No profile found for engineer ${engineerId}` };
+    const aLines = await SELECT.from(ProfileLine).where({ header_ID: oHeader.ID });
+    const dNow = new Date();
+    const sDate = dNow.toISOString().slice(0, 10);
+    const sTime = dNow.toISOString().slice(11, 19);
+    await UPDATE(ProfileHeader).set({ status: 'Leaver' }).where({ ID: oHeader.ID });
+    const sArchiveId = cds.utils.uuid();
+    await INSERT.into(ArchiveHeader).entries({
+        ID: sArchiveId, dateArchived: sDate, timeArchived: sTime,
+        dateCreated: oHeader.dateCreated, engineerId, businessUnit: oHeader.businessUnit, status: 'Leaver'
+    });
+    for (const oLine of aLines) {
+        await INSERT.into(ArchiveLine).entries({
+            ID: cds.utils.uuid(), archiveHeader_ID: sArchiveId,
+            productGroup: oLine.productGroup, productStatus: oLine.productStatus,
+            partNumber: oLine.partNumber, quantity: oLine.quantity, baseUOM: oLine.baseUOM, value: oLine.value
+        });
+    }
+    for (const oLine of aLines) {
+        await UPDATE(ProfileLine).set({ quantity: 0, value: 0 }).where({ ID: oLine.ID });
+        await INSERT.into(ChangeLog).entries({
+            ID: cds.utils.uuid(), changeDate: sDate, changeTime: sTime, userId: sUserId, engineerId,
+            transactionType: 'LV',
+            beforePartNumber: oLine.partNumber, beforeQuantity: oLine.quantity, beforeValue: oLine.value,
+            afterPartNumber: oLine.partNumber, afterQuantity: 0, afterValue: 0
+        });
+    }
+    await UPDATE(ProfileHeader).set({ status: 'Closed' }).where({ ID: oHeader.ID });
+    return { ok: true, message: `Engineer ${engineerId} processed as leaver, profile archived and closed` };
 }
 
 
@@ -280,8 +333,8 @@ module.exports = cds.service.impl(function () {
 
         const sUploadedBy = req.user ? req.user.id : 'unknown';
 
-       return loadLookups()
-    .then((oLookups) => processExcelFullStream(buffer, oLookups, UploadLog, ProfileHeader, ProfileLine, ChangeLog, sUploadedBy))
+        return loadLookups()
+            .then((oLookups) => processExcelFullStream(buffer, oLookups, UploadLog, ProfileHeader, ProfileLine, ChangeLog, sUploadedBy))
             .then((oSummary) => {
                 if (oSummary.iTotalRows === 0) {
                     req.error(400, 'Excel file does not contain any data rows');
@@ -298,57 +351,57 @@ module.exports = cds.service.impl(function () {
                 req.error(500, `Upload failed: ${oError.message}`);
             });
     });
-  this.on('postProfiles', async (req) => {
-    const { logIds } = req.data;
+    this.on('postProfiles', async (req) => {
+        const { logIds } = req.data;
 
-    if (!logIds || logIds.length === 0) {
-        req.error(400, "No rows selected to post");
-        return;
-    }
-
-    try {
-        const aSelectedLogs = await SELECT.from(UploadLog).where({ ID: { in: logIds } });
-
-        const aAlreadyPosted = aSelectedLogs.filter(e => e.posted);
-        const aFailedRows = aSelectedLogs.filter(e => e.status !== 'Success');
-        const aToPost = aSelectedLogs.filter(e => e.status === 'Success' && !e.posted);
-
-        if (aAlreadyPosted.length > 0) {
-            req.error(400, `${aAlreadyPosted.length} selected row(s) were already posted`);
-            return;
-        }
-        if (aFailedRows.length > 0) {
-            req.error(400, `${aFailedRows.length} selected row(s) failed validation and cannot be posted`);
-            return;
-        }
-        if (aToPost.length === 0) {
-            req.error(400, "No valid rows to post");
+        if (!logIds || logIds.length === 0) {
+            req.error(400, "No rows selected to post");
             return;
         }
 
-        for (const oLog of aToPost) {
-            await upsertProfileLine({
-                ProfileHeader, ProfileLine, ChangeLog,
-                engineerId: oLog.engineerId,
-                businessUnit: oLog.profitCenter,
-                productGroup: '', productStatus: '',
-                partNumber: oLog.partNumber,
-                quantity: oLog.quantity, baseUOM: '',
-                value: oLog.value,
-                userId: req.user ? req.user.id : 'unknown'
-            });
+        try {
+            const aSelectedLogs = await SELECT.from(UploadLog).where({ ID: { in: logIds } });
+
+            const aAlreadyPosted = aSelectedLogs.filter(e => e.posted);
+            const aFailedRows = aSelectedLogs.filter(e => e.status !== 'Success');
+            const aToPost = aSelectedLogs.filter(e => e.status === 'Success' && !e.posted);
+
+            if (aAlreadyPosted.length > 0) {
+                req.error(400, `${aAlreadyPosted.length} selected row(s) were already posted`);
+                return;
+            }
+            if (aFailedRows.length > 0) {
+                req.error(400, `${aFailedRows.length} selected row(s) failed validation and cannot be posted`);
+                return;
+            }
+            if (aToPost.length === 0) {
+                req.error(400, "No valid rows to post");
+                return;
+            }
+
+            for (const oLog of aToPost) {
+                await upsertProfileLine({
+                    ProfileHeader, ProfileLine, ChangeLog,
+                    engineerId: oLog.engineerId,
+                    businessUnit: oLog.profitCenter,
+                    productGroup: '', productStatus: '',
+                    partNumber: oLog.partNumber,
+                    quantity: oLog.quantity, baseUOM: '',
+                    value: oLog.value,
+                    userId: req.user ? req.user.id : 'unknown'
+                });
+            }
+
+            await UPDATE(UploadLog).set({ posted: true }).where({ ID: { in: aToPost.map(e => e.ID) } });
+
+            return {
+                message: `${aToPost.length} record(s) posted to Van Stock Profile`,
+                postedCount: aToPost.length
+            };
+        } catch (oError) {
+            req.error(400, oError.message);
         }
-
-        await UPDATE(UploadLog).set({ posted: true }).where({ ID: { in: aToPost.map(e => e.ID) } });
-
-        return {
-            message: `${aToPost.length} record(s) posted to Van Stock Profile`,
-            postedCount: aToPost.length
-        };
-    } catch (oError) {
-        req.error(400, oError.message);
-    }
-});
+    });
     this.on('uploadProfileChunk', async (req) => {
         const { rows } = req.data;
 
@@ -414,37 +467,37 @@ module.exports = cds.service.impl(function () {
     // NEW — Post ALL unposted successful rows at once, no manual selection
     // (avoids the 200-item UI selection limit at large scale)
     // ============================
-   this.on('postAllProfiles', async (req) => {
-    try {
-        const aToPost = await SELECT.from(UploadLog).where({ status: 'Success', posted: false });
+    this.on('postAllProfiles', async (req) => {
+        try {
+            const aToPost = await SELECT.from(UploadLog).where({ status: 'Success', posted: false });
 
-        if (aToPost.length === 0) {
-            return { message: "No unposted successful rows found", postedCount: 0 };
+            if (aToPost.length === 0) {
+                return { message: "No unposted successful rows found", postedCount: 0 };
+            }
+
+            for (const oLog of aToPost) {
+                await upsertProfileLine({
+                    ProfileHeader, ProfileLine, ChangeLog,
+                    engineerId: oLog.engineerId,
+                    businessUnit: oLog.profitCenter,
+                    productGroup: '', productStatus: '',
+                    partNumber: oLog.partNumber,
+                    quantity: oLog.quantity, baseUOM: '',
+                    value: oLog.value,
+                    userId: req.user ? req.user.id : 'unknown'
+                });
+            }
+
+            await UPDATE(UploadLog).set({ posted: true }).where({ status: 'Success', posted: false });
+
+            return {
+                message: `${aToPost.length} record(s) posted to Van Stock Profile`,
+                postedCount: aToPost.length
+            };
+        } catch (oError) {
+            req.error(500, `Post all failed: ${oError.message}`);
         }
-
-        for (const oLog of aToPost) {
-            await upsertProfileLine({
-                ProfileHeader, ProfileLine, ChangeLog,
-                engineerId: oLog.engineerId,
-                businessUnit: oLog.profitCenter,
-                productGroup: '', productStatus: '',
-                partNumber: oLog.partNumber,
-                quantity: oLog.quantity, baseUOM: '',
-                value: oLog.value,
-                userId: req.user ? req.user.id : 'unknown'
-            });
-        }
-
-        await UPDATE(UploadLog).set({ posted: true }).where({ status: 'Success', posted: false });
-
-        return {
-            message: `${aToPost.length} record(s) posted to Van Stock Profile`,
-            postedCount: aToPost.length
-        };
-    } catch (oError) {
-        req.error(500, `Post all failed: ${oError.message}`);
-    }
-});
+    });
     //Procedure
     this.on('uploadProfileChunkViaProcedure', (req) => {
         const { rows } = req.data;
@@ -494,94 +547,274 @@ module.exports = cds.service.impl(function () {
         });
     });
     //Process Return
-    this.on('processReturn', async (req) => {
-        const { engineerId, partNumber, quantity } = req.data;
-        const sUserId = req.user ? req.user.id : 'unknown';
+    // this.on('processReturn', async (req) => {
+    //     const { engineerId, partNumber, quantity } = req.data;
+    //     const sUserId = req.user ? req.user.id : 'unknown';
 
-        const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
-        if (!oHeader) {
-            req.error(400, `No profile found for engineer ${engineerId}`);
-            return;
-        }
+    //     const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+    //     if (!oHeader) {
+    //         req.error(400, `No profile found for engineer ${engineerId}`);
+    //         return;
+    //     }
 
-        const oLine = await SELECT.one.from(ProfileLine)
-            .where({ header_ID: oHeader.ID, partNumber });
+    //     const oLine = await SELECT.one.from(ProfileLine)
+    //         .where({ header_ID: oHeader.ID, partNumber });
 
-        if (!oLine) {
-            req.error(400, `Part ${partNumber} not found in engineer ${engineerId}'s inventory`);
-            return;
-        }
+    //     if (!oLine) {
+    //         req.error(400, `Part ${partNumber} not found in engineer ${engineerId}'s inventory`);
+    //         return;
+    //     }
 
-        const nNewQty = Number(oLine.quantity) - Number(quantity);
-        if (nNewQty < 0) {
-            req.error(400, `Return would result in negative quantity for part ${partNumber}`);
-            return;
-        }
+    //     const nNewQty = Number(oLine.quantity) - Number(quantity);
+    //     if (nNewQty < 0) {
+    //         req.error(400, `Return would result in negative quantity for part ${partNumber}`);
+    //         return;
+    //     }
 
-        const dNow = new Date();
-        await UPDATE(ProfileLine).set({ quantity: nNewQty }).where({ ID: oLine.ID });
+    //     const dNow = new Date();
+    //     await UPDATE(ProfileLine).set({ quantity: nNewQty }).where({ ID: oLine.ID });
 
-        await INSERT.into(ChangeLog).entries({
-            ID: cds.utils.uuid(),
-            changeDate: dNow.toISOString().slice(0, 10),
-            changeTime: dNow.toISOString().slice(11, 19),
-            userId: sUserId, engineerId, transactionType: 'RE',
-            beforePartNumber: partNumber, beforeQuantity: oLine.quantity,
-            afterPartNumber: partNumber, afterQuantity: nNewQty
+    //     await INSERT.into(ChangeLog).entries({
+    //         ID: cds.utils.uuid(),
+    //         changeDate: dNow.toISOString().slice(0, 10),
+    //         changeTime: dNow.toISOString().slice(11, 19),
+    //         userId: sUserId, engineerId, transactionType: 'RE',
+    //         beforePartNumber: partNumber, beforeQuantity: oLine.quantity,
+    //         afterPartNumber: partNumber, afterQuantity: nNewQty
+    //     });
+
+    //     return { message: `Returned ${quantity} of ${partNumber} for ${engineerId}` };
+    // });
+
+    // this.on('processLeaver', async (req) => {
+    //     const { engineerId } = req.data;
+    //     const sUserId = req.user ? req.user.id : 'unknown';
+
+    //     const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+    //     if (!oHeader) {
+    //         req.error(400, `No profile found for engineer ${engineerId}`);
+    //         return;
+    //     }
+
+    //     const aLines = await SELECT.from(ProfileLine).where({ header_ID: oHeader.ID });
+    //     const dNow = new Date();
+    //     const sDate = dNow.toISOString().slice(0, 10);
+    //     const sTime = dNow.toISOString().slice(11, 19);
+
+    //     await UPDATE(ProfileHeader).set({ status: 'Leaver' }).where({ ID: oHeader.ID });
+
+    //     const sArchiveId = cds.utils.uuid();
+    //     await INSERT.into(ArchiveHeader).entries({
+    //         ID: sArchiveId,
+    //         dateArchived: sDate, timeArchived: sTime,
+    //         dateCreated: oHeader.dateCreated, engineerId,
+    //         businessUnit: oHeader.businessUnit, status: 'Leaver'
+    //     });
+
+    //     for (const oLine of aLines) {
+    //         await INSERT.into(ArchiveLine).entries({
+    //             ID: cds.utils.uuid(),
+    //             archiveHeader_ID: sArchiveId,
+    //             productGroup: oLine.productGroup, productStatus: oLine.productStatus,
+    //             partNumber: oLine.partNumber, quantity: oLine.quantity,
+    //             baseUOM: oLine.baseUOM, value: oLine.value
+    //         });
+    //     }
+
+    //     for (const oLine of aLines) {
+    //         await UPDATE(ProfileLine).set({ quantity: 0, value: 0 }).where({ ID: oLine.ID });
+
+    //         await INSERT.into(ChangeLog).entries({
+    //             ID: cds.utils.uuid(),
+    //             changeDate: sDate, changeTime: sTime, userId: sUserId, engineerId,
+    //             transactionType: 'LV',
+    //             beforePartNumber: oLine.partNumber, beforeQuantity: oLine.quantity, beforeValue: oLine.value,
+    //             afterPartNumber: oLine.partNumber, afterQuantity: 0, afterValue: 0
+    //         });
+    //     }
+
+    //     await UPDATE(ProfileHeader).set({ status: 'Closed' }).where({ ID: oHeader.ID });
+
+    //     return { message: `Engineer ${engineerId} processed as leaver, profile archived and closed` };
+    // });
+    // REPLACE THIS (lines ~587–633 in your file):
+
+    this.before('UPDATE', ProfileLine, async (req) => {
+        const aEditable = ['quantity', 'value'];
+        const sLineId = req.data.ID || (req.params[0] && req.params[0].ID);
+        const oOldLine = await SELECT.one.from(ProfileLine).where({ ID: sLineId });
+        if (!oOldLine) return;
+        const aViolations = Object.keys(req.data).filter(k => {
+            if (k === 'ID' || aEditable.includes(k)) return false;
+            return req.data[k] !== undefined && req.data[k] !== oOldLine[k];
         });
-
-        return { message: `Returned ${quantity} of ${partNumber} for ${engineerId}` };
+        if (aViolations.length > 0) {
+            req.reject(400, `Only quantity and value can be edited. Not allowed: ${aViolations.join(', ')}`);
+        }
     });
 
-    this.on('processLeaver', async (req) => {
-        const { engineerId } = req.data;
-        const sUserId = req.user ? req.user.id : 'unknown';
-
-        const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
-        if (!oHeader) {
-            req.error(400, `No profile found for engineer ${engineerId}`);
-            return;
+    this.on('UPDATE', ProfileLine, async (req, next) => {
+        const sLineId = req.data.ID || (req.params[0] && req.params[0].ID);
+        console.log('UPDATE ProfileLine — resolved sLineId:', sLineId, 'req.params:', JSON.stringify(req.params));
+        const oOldLine = await SELECT.one.from(ProfileLine).where({ ID: sLineId });
+        console.log('oOldLine found:', !!oOldLine);
+        const oResult = await next();
+        if (oOldLine) {
+            const oHeader = await SELECT.one.from(ProfileHeader).where({ ID: oOldLine.header_ID });
+            const dNow = new Date();
+            await INSERT.into(ChangeLog).entries({
+                ID: cds.utils.uuid(),
+                changeDate: dNow.toISOString().slice(0, 10),
+                changeTime: dNow.toISOString().slice(11, 19),
+                userId: req.user ? req.user.id : 'unknown',
+                engineerId: oHeader ? oHeader.engineerId : null,
+                transactionType: 'AD',
+                beforePartNumber: oOldLine.partNumber,
+                beforeQuantity: oOldLine.quantity,
+                beforeValue: oOldLine.value,
+                afterPartNumber: oOldLine.partNumber,
+                afterQuantity: req.data.quantity !== undefined ? req.data.quantity : oOldLine.quantity,
+                afterValue: req.data.value !== undefined ? req.data.value : oOldLine.value
+            });
         }
+        return oResult;
+    });
+    // WITH THIS:
 
-        const aLines = await SELECT.from(ProfileLine).where({ header_ID: oHeader.ID });
+    this.before('SAVE', ProfileHeader, async (req) => {
+        const sHeaderId = req.data.ID || (req.params[0] && req.params[0].ID);
+        if (!sHeaderId) return;
+
+        const sUserId = req.user ? req.user.id : 'unknown';
         const dNow = new Date();
         const sDate = dNow.toISOString().slice(0, 10);
         const sTime = dNow.toISOString().slice(11, 19);
 
-        await UPDATE(ProfileHeader).set({ status: 'Leaver' }).where({ ID: oHeader.ID });
+        const oHeader = await SELECT.one.from(ProfileHeader).where({ ID: sHeaderId });
+        const sEngineerId = oHeader ? oHeader.engineerId : null;
 
-        const sArchiveId = cds.utils.uuid();
-        await INSERT.into(ArchiveHeader).entries({
-            ID: sArchiveId,
-            dateArchived: sDate, timeArchived: sTime,
-            dateCreated: oHeader.dateCreated, engineerId,
-            businessUnit: oHeader.businessUnit, status: 'Leaver'
-        });
+        // "before" state = what's currently active (not yet overwritten — SAVE hasn't run yet)
+        const aActiveLines = await SELECT.from(ProfileLine).where({ header_ID: sHeaderId });
+        // "after" state = what the user edited, sitting in the draft shadow table
+        const aDraftLines = await SELECT.from(ProfileLine.drafts).where({ header_ID: sHeaderId });
 
-        for (const oLine of aLines) {
-            await INSERT.into(ArchiveLine).entries({
-                ID: cds.utils.uuid(),
-                archiveHeader_ID: sArchiveId,
-                productGroup: oLine.productGroup, productStatus: oLine.productStatus,
-                partNumber: oLine.partNumber, quantity: oLine.quantity,
-                baseUOM: oLine.baseUOM, value: oLine.value
-            });
+        const oActiveById = {};
+        aActiveLines.forEach(l => { oActiveById[l.ID] = l; });
+
+        const aChangeLogEntries = [];
+        for (const oDraftLine of aDraftLines) {
+            const oOld = oActiveById[oDraftLine.ID];
+            if (!oOld) continue; // a newly-added line in this edit session, nothing to diff against
+
+            const bQtyChanged = Number(oOld.quantity) !== Number(oDraftLine.quantity);
+            const bValChanged = Number(oOld.value) !== Number(oDraftLine.value);
+            if (bQtyChanged || bValChanged) {
+                aChangeLogEntries.push({
+                    ID: cds.utils.uuid(),
+                    changeDate: sDate, changeTime: sTime,
+                    userId: sUserId, engineerId: sEngineerId,
+                    transactionType: 'AD',
+                    beforePartNumber: oOld.partNumber, beforeQuantity: oOld.quantity, beforeValue: oOld.value,
+                    afterPartNumber: oDraftLine.partNumber, afterQuantity: oDraftLine.quantity, afterValue: oDraftLine.value
+                });
+            }
         }
 
-        for (const oLine of aLines) {
-            await UPDATE(ProfileLine).set({ quantity: 0, value: 0 }).where({ ID: oLine.ID });
-
-            await INSERT.into(ChangeLog).entries({
-                ID: cds.utils.uuid(),
-                changeDate: sDate, changeTime: sTime, userId: sUserId, engineerId,
-                transactionType: 'LV',
-                beforePartNumber: oLine.partNumber, beforeQuantity: oLine.quantity, beforeValue: oLine.value,
-                afterPartNumber: oLine.partNumber, afterQuantity: 0, afterValue: 0
-            });
+        if (aChangeLogEntries.length > 0) {
+            await INSERT.into(ChangeLog).entries(aChangeLogEntries);
         }
-
-        await UPDATE(ProfileHeader).set({ status: 'Closed' }).where({ ID: oHeader.ID });
-
-        return { message: `Engineer ${engineerId} processed as leaver, profile archived and closed` };
     });
+    // this.on('processReturn', async (req) => {
+    //     const { engineerId, partNumber, quantity } = req.data;
+    //     const sUserId = req.user ? req.user.id : 'unknown';
+    //     const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+    //     if (!oHeader) { req.error(400, `No profile found for engineer ${engineerId}`); return; }
+    //     const oLine = await SELECT.one.from(ProfileLine).where({ header_ID: oHeader.ID, partNumber });
+    //     if (!oLine) { req.error(400, `Part ${partNumber} not found in engineer ${engineerId}'s inventory`); return; }
+    //     const nNewQty = Number(oLine.quantity) - Number(quantity);
+    //     if (nNewQty < 0) { req.error(400, `Return would result in negative quantity for part ${partNumber}`); return; }
+    //     const dNow = new Date();
+    //     await UPDATE(ProfileLine).set({ quantity: nNewQty }).where({ ID: oLine.ID });
+    //     await INSERT.into(ChangeLog).entries({
+    //         ID: cds.utils.uuid(), changeDate: dNow.toISOString().slice(0, 10), changeTime: dNow.toISOString().slice(11, 19),
+    //         userId: sUserId, engineerId, transactionType: 'RE',
+    //         beforePartNumber: partNumber, beforeQuantity: oLine.quantity,
+    //         afterPartNumber: partNumber, afterQuantity: nNewQty
+    //     });
+    //     return { message: `Returned ${quantity} of ${partNumber} for ${engineerId}` };
+    // });
+
+    // this.on('processLeaver', async (req) => {
+    //     const { engineerId } = req.data;
+    //     const sUserId = req.user ? req.user.id : 'unknown';
+    //     const oHeader = await SELECT.one.from(ProfileHeader).where({ engineerId });
+    //     if (!oHeader) { req.error(400, `No profile found for engineer ${engineerId}`); return; }
+    //     const aLines = await SELECT.from(ProfileLine).where({ header_ID: oHeader.ID });
+    //     const dNow = new Date();
+    //     const sDate = dNow.toISOString().slice(0, 10);
+    //     const sTime = dNow.toISOString().slice(11, 19);
+    //     await UPDATE(ProfileHeader).set({ status: 'Leaver' }).where({ ID: oHeader.ID });
+    //     const sArchiveId = cds.utils.uuid();
+    //     await INSERT.into(ArchiveHeader).entries({
+    //         ID: sArchiveId, dateArchived: sDate, timeArchived: sTime,
+    //         dateCreated: oHeader.dateCreated, engineerId, businessUnit: oHeader.businessUnit, status: 'Leaver'
+    //     });
+    //     for (const oLine of aLines) {
+    //         await INSERT.into(ArchiveLine).entries({
+    //             ID: cds.utils.uuid(), archiveHeader_ID: sArchiveId,
+    //             productGroup: oLine.productGroup, productStatus: oLine.productStatus,
+    //             partNumber: oLine.partNumber, quantity: oLine.quantity, baseUOM: oLine.baseUOM, value: oLine.value
+    //         });
+    //     }
+    //     for (const oLine of aLines) {
+    //         await UPDATE(ProfileLine).set({ quantity: 0, value: 0 }).where({ ID: oLine.ID });
+    //         await INSERT.into(ChangeLog).entries({
+    //             ID: cds.utils.uuid(), changeDate: sDate, changeTime: sTime, userId: sUserId, engineerId,
+    //             transactionType: 'LV',
+    //             beforePartNumber: oLine.partNumber, beforeQuantity: oLine.quantity, beforeValue: oLine.value,
+    //             afterPartNumber: oLine.partNumber, afterQuantity: 0, afterValue: 0
+    //         });
+    //     }
+    //     await UPDATE(ProfileHeader).set({ status: 'Closed' }).where({ ID: oHeader.ID });
+    //     return { message: `Engineer ${engineerId} processed as leaver, profile archived and closed` };
+    // });
+    this.on('processReturn', async (req) => {
+        const { engineerId, partNumber, quantity } = req.data;
+        const oResult = await doProcessReturn({ ProfileHeader, ProfileLine, ChangeLog }, engineerId, partNumber, quantity, req.user ? req.user.id : 'unknown');
+        if (!oResult.ok) { req.error(400, oResult.error); return; }
+        return { message: oResult.message };
+    });
+
+    this.on('processLeaver', async (req) => {
+        const { engineerId } = req.data;
+        const oResult = await doProcessLeaver({ ProfileHeader, ProfileLine, ChangeLog, ArchiveHeader, ArchiveLine }, engineerId, req.user ? req.user.id : 'unknown');
+        if (!oResult.ok) { req.error(400, oResult.error); return; }
+        return { message: oResult.message };
+    });
+
+    // NEW — bulk entry points for file-driven Return/Leaver processing
+    this.on('processReturnBulk', async (req) => {
+        const { rows } = req.data;
+        const sUserId = req.user ? req.user.id : 'unknown';
+        let iSuccess = 0, iFail = 0;
+        const aErrors = [];
+        for (const r of rows || []) {
+            const oResult = await doProcessReturn({ ProfileHeader, ProfileLine, ChangeLog }, r.engineerId, r.partNumber, r.quantity, sUserId);
+            if (oResult.ok) { iSuccess++; } else { iFail++; aErrors.push(oResult.error); }
+        }
+        return { successCount: iSuccess, failCount: iFail, errors: aErrors };
+    });
+
+    this.on('processLeaverBulk', async (req) => {
+        const { rows } = req.data;
+        const sUserId = req.user ? req.user.id : 'unknown';
+        let iSuccess = 0, iFail = 0;
+        const aErrors = [];
+        for (const r of rows || []) {
+            const oResult = await doProcessLeaver({ ProfileHeader, ProfileLine, ChangeLog, ArchiveHeader, ArchiveLine }, r.engineerId, sUserId);
+            if (oResult.ok) { iSuccess++; } else { iFail++; aErrors.push(oResult.error); }
+        }
+        return { successCount: iSuccess, failCount: iFail, errors: aErrors };
+    });
+
 });
