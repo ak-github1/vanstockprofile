@@ -15,10 +15,16 @@
                     fileType="xlsx"
                     placeholder="Choose Excel file..."
                     change=".onFileChange" />
-
+                
+                
+<RadioButtonGroup id="scenarioModeGroup" columns="1" class="sapUiSmallMarginTop">
+    <RadioButton id="newProfileScenarioRadio" text="New Profile / Addition" selected="true" />
+    <RadioButton id="returnScenarioRadio" text="Return" />
+    <RadioButton id="leaverScenarioRadio" text="Leaver" />
+</RadioButtonGroup>
                 <RadioButtonGroup id="uploadModeGroup" columns="1" class="sapUiSmallMarginTop">
-                    <RadioButton id="chunkModeRadio" text="Upload in chunks" selected="true" />
-                    <RadioButton id="noChunkModeRadio" text="Upload entire file in one request" />
+                    <!-- <RadioButton id="chunkModeRadio" text="Upload in chunks" selected="true" />
+                    <RadioButton id="noChunkModeRadio" text="Upload entire file in one request" /> -->
                <RadioButton id="fullStreamModeRadio" text="Upload entire file and stream process" />
                 </RadioButtonGroup>
             </VBox>

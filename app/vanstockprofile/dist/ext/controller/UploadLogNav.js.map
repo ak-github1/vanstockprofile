@@ -1,0 +1,1 @@
+{"version":3,"file":"UploadLogNav.js","names":["sap","ui","define","openUploadLogs","this","routing","navigateToRoute"],"sources":["UploadLogNav-dbg.js"],"mappings":"AAAAA,IAAIC,GAAGC,OAAO,GAAI,WACd,aAGA,MAAO,CACHC,eAAgB,WACZC,KAAKC,QAAQC,gBAAgB,gBACjC,EAER","ignoreList":[]}

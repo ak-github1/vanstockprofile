@@ -6,4 +6,11 @@ cds.on('bootstrap', (app) => {
     app.use(express.urlencoded({ limit: '50mb', extended: true }));
 });
 
+// Enable On Select: object page line items are editable only when ticked
+cds.on('served', (services) => {
+    if (services.VanStockProfile) {
+        require('./lib/lineSelect')(services.VanStockProfile);
+    }
+});
+
 module.exports = cds.server;

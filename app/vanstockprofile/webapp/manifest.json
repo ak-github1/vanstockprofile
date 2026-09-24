@@ -64,6 +64,15 @@
         "sap.fe.templates": {}
       }
     },
+    "extends": {
+      "extensions": {
+        "sap.ui.controllerExtensions": {
+          "sap.fe.templates.ObjectPage.ObjectPageController": {
+            "controllerName": "com.vanstockprofile.ext.controller.ObjectPageExt"
+          }
+        }
+      }
+    },
     "contentDensities": {
       "compact": true,
       "cozy": true
@@ -133,7 +142,6 @@
                     "type": "GridTable"
                   },
                   "actions": {
-                    
                     "UploadLogs": {
                       "press": "com.vanstockprofile.ext.controller.UploadLogNav.openUploadLogs",
                       "visible": true,

@@ -113,6 +113,12 @@ annotate service.ProfileHeader with @(
             ID     : 'LineItemsFacet',
             Label  : 'Line Items',
             Target : 'lines/@UI.LineItem'
+        },
+        {
+            $Type  : 'UI.ReferenceFacet',
+            ID     : 'ChangeLogFacet',
+            Label  : 'Change Log',
+            Target : 'changeLogs/@UI.LineItem'
         }
     ]
 );
@@ -154,6 +160,6 @@ annotate service.ProfileLine with {
     productGroup  @title: 'Product Group' @Core.Immutable;
     productStatus @title: 'Status' @Core.Immutable;
     quantity      @title: 'Quantity';
-    baseUOM       @title: 'UOM' @Core.Immutable;
+    baseUOM       @title: 'UOM';
     value         @title: 'Value';
 };
