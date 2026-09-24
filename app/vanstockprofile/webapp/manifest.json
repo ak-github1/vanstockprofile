@@ -133,6 +133,14 @@
                     "type": "GridTable"
                   },
                   "actions": {
+                    
+                    "UploadLogs": {
+                      "press": "com.vanstockprofile.ext.controller.UploadLogNav.openUploadLogs",
+                      "visible": true,
+                      "enabled": true,
+                      "requiresSelection": false,
+                      "text": "Upload Logs"
+                    },
                     "VanStockProfileList": {
                       "press": "com.vanstockprofile.ext.controller.VanStockProfileList.uploadProfile",
                       "visible": true,
