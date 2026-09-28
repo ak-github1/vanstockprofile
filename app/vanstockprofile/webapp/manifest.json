@@ -158,7 +158,7 @@
                     },
                     "UploadProfileViaProcedure": {
                       "press": "com.vanstockprofile.ext.controller.VanStockProfileList.uploadProfileViaProcedure",
-                      "visible": true,
+                      "visible": false,
                       "enabled": true,
                       "requiresSelection": false,
                       "text": "Upload Profile (HANA Procedure)"
@@ -188,7 +188,6 @@
             "settings": {
               "contextPath": "/UploadLog",
               "variantManagement": "Page",
-              "initialLoad": "Enabled",
               "controlConfiguration": {
                 "@com.sap.vocabularies.UI.v1.LineItem": {
                   "tableSettings": {

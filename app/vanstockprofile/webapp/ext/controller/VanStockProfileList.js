@@ -46,7 +46,7 @@ sap.ui.define([
         });
     }
 
-    function sendRows(oModel, sActionName, aAllRows, sLabelPrefix, bNoChunk, fnProgress) {
+    function sendRows(oModel, sActionName, aAllRows, sLabelPrefix, bNoChunk, sUploadedOn, fnProgress) {
         var aChunks;
 
         if (bNoChunk) {
@@ -79,7 +79,10 @@ sap.ui.define([
             debugger
             var oOperation = oModel.bindContext("/" + sActionName + "(...)", null, { $$groupId: '$direct' });
             oOperation.setParameter("rows", aChunkRows);
-
+            //commented for chunk
+            if (bNoChunk === false || bNoChunk === true ) { } else {
+                oOperation.setParameter("uploadedOn", sUploadedOn);
+            }
             return oOperation.execute().then(function () {
                 var oResult = oOperation.getBoundContext().getObject();
                 iTotalSuccess += oResult.successCount;
@@ -134,22 +137,23 @@ sap.ui.define([
                     MessageToast.show("Could not find OData model on control");
                     return;
                 }
-                // ADD THIS — scenario detection
+
+                var sUploadedOn = new Date().toISOString();
+
                 var oReturnRadio = Fragment.byId(sFragmentId, "returnScenarioRadio");
                 var oLeaverRadio = Fragment.byId(sFragmentId, "leaverScenarioRadio");
                 var bReturn = !!(oReturnRadio && oReturnRadio.getSelected());
                 var bLeaver = !!(oLeaverRadio && oLeaverRadio.getSelected());
 
                 if (bReturn || bLeaver) {
-                    var dStart2 = Date.now();
                     oDialog.setBusy(true);
                     oDialog.setBusyIndicatorDelay(0);
-                    var fnParse = bReturn ? parseReturnFile : parseLeaverFile;
                     var sBulkAction = bReturn ? "processReturnBulk" : "processLeaverBulk";
                     var sLabel = bReturn ? "Return" : "Leaver";
 
-                    fnParse(oFile).then(function (aAllRows) {
-                        return sendRows(oFound.oModel, sBulkAction, aAllRows, "[" + sLabel + "] ", false);
+                    // one shared template — same parser as New/Addition
+                    parseExcelFile(oFile).then(function (aAllRows) {
+                        return sendRows(oFound.oModel, sBulkAction, aAllRows, "[" + sLabel + "] ", false, sUploadedOn);
                     }).then(function (oSummary) {
                         oDialog.setBusy(false);
                         oSelectedFile = null;
@@ -160,7 +164,7 @@ sap.ui.define([
                                 title: sLabel + " Processing Complete",
                                 onClose: function () {
                                     if (oFound.oComponent && oFound.oComponent.getRouter) {
-                                        oFound.oComponent.getRouter().navTo("UploadLogList");
+                                        oFound.oComponent.getRouter().navTo("UploadLogList", { "?query": { uploadedOn: sUploadedOn } });
                                     }
                                 }
                             }
@@ -173,10 +177,10 @@ sap.ui.define([
                             MessageBox.error((oError && oError.message) || "Unknown error", { title: sLabel + " Failed" });
                         }
                     });
-                    return; // stop here — don't fall through to the existing New/Addition logic below
+                    return;
                 }
                 // END ADD
-                
+
 
                 var oNoChunkRadio = Fragment.byId(sFragmentId, "noChunkModeRadio");
                 var oFullStreamRadio = Fragment.byId(sFragmentId, "fullStreamModeRadio");
@@ -198,6 +202,7 @@ sap.ui.define([
                         var oOperation = oFound.oModel.bindContext("/uploadProfileFull(...)", null, { $$groupId: '$direct' });
                         oOperation.setParameter("file", sBase64);
                         oOperation.setParameter("mimetype", oFile.type);
+                        oOperation.setParameter("uploadedOn", sUploadedOn);
 
                         oOperation.execute().then(function () {
                             var oResult = oOperation.getBoundContext().getObject();
@@ -213,7 +218,7 @@ sap.ui.define([
                                     title: "Upload Complete",
                                     onClose: function () {
                                         if (oFound.oComponent && oFound.oComponent.getRouter) {
-                                            oFound.oComponent.getRouter().navTo("UploadLogList");
+                                            oFound.oComponent.getRouter().navTo("UploadLogList", { "?query": { uploadedOn: sUploadedOn } });
                                         }
                                     }
                                 }
@@ -254,7 +259,7 @@ sap.ui.define([
                                 title: sLabelPrefix + "Upload Complete",
                                 onClose: function () {
                                     if (oFound.oComponent && oFound.oComponent.getRouter) {
-                                        oFound.oComponent.getRouter().navTo("UploadLogList");
+                                        oFound.oComponent.getRouter().navTo("UploadLogList", { "?query": { uploadedOn: sUploadedOn } });
                                     }
                                 }
                             }
@@ -298,47 +303,47 @@ sap.ui.define([
             });
         };
     }
-    function parseReturnFile(oFile) {
-        return oFile.arrayBuffer().then(function (arrayBuffer) {
-            var workbook = new ExcelJS.Workbook();
-            return workbook.xlsx.load(arrayBuffer);
-        }).then(function (workbook) {
-            var worksheet = workbook.worksheets[0];
-            var aAllRows = [];
-            worksheet.eachRow(function (row, rowNumber) {
-                if (rowNumber === 1) return;
-                var engineerId = row.getCell(1).value;
-                var partNumber = row.getCell(2).value;
-                var quantity = row.getCell(3).value;
-                if (!engineerId && !partNumber && !quantity) return;
-                aAllRows.push({
-                    engineerId: engineerId ? String(engineerId) : null,
-                    partNumber: partNumber ? String(partNumber) : null,
-                    quantity: isNaN(Number(quantity)) ? null : Number(quantity)
-                });
-            });
-            if (aAllRows.length === 0) return Promise.reject(new Error("NO_ROWS"));
-            return aAllRows;
-        });
-    }
+    // function parseReturnFile(oFile) {
+    //     return oFile.arrayBuffer().then(function (arrayBuffer) {
+    //         var workbook = new ExcelJS.Workbook();
+    //         return workbook.xlsx.load(arrayBuffer);
+    //     }).then(function (workbook) {
+    //         var worksheet = workbook.worksheets[0];
+    //         var aAllRows = [];
+    //         worksheet.eachRow(function (row, rowNumber) {
+    //             if (rowNumber === 1) return;
+    //             var engineerId = row.getCell(1).value;
+    //             var partNumber = row.getCell(2).value;
+    //             var quantity = row.getCell(3).value;
+    //             if (!engineerId && !partNumber && !quantity) return;
+    //             aAllRows.push({
+    //                 engineerId: engineerId ? String(engineerId) : null,
+    //                 partNumber: partNumber ? String(partNumber) : null,
+    //                 quantity: isNaN(Number(quantity)) ? null : Number(quantity)
+    //             });
+    //         });
+    //         if (aAllRows.length === 0) return Promise.reject(new Error("NO_ROWS"));
+    //         return aAllRows;
+    //     });
+    // }
 
-    function parseLeaverFile(oFile) {
-        return oFile.arrayBuffer().then(function (arrayBuffer) {
-            var workbook = new ExcelJS.Workbook();
-            return workbook.xlsx.load(arrayBuffer);
-        }).then(function (workbook) {
-            var worksheet = workbook.worksheets[0];
-            var aAllRows = [];
-            worksheet.eachRow(function (row, rowNumber) {
-                if (rowNumber === 1) return;
-                var engineerId = row.getCell(1).value;
-                if (!engineerId) return;
-                aAllRows.push({ engineerId: String(engineerId) });
-            });
-            if (aAllRows.length === 0) return Promise.reject(new Error("NO_ROWS"));
-            return aAllRows;
-        });
-    }
+    // function parseLeaverFile(oFile) {
+    //     return oFile.arrayBuffer().then(function (arrayBuffer) {
+    //         var workbook = new ExcelJS.Workbook();
+    //         return workbook.xlsx.load(arrayBuffer);
+    //     }).then(function (workbook) {
+    //         var worksheet = workbook.worksheets[0];
+    //         var aAllRows = [];
+    //         worksheet.eachRow(function (row, rowNumber) {
+    //             if (rowNumber === 1) return;
+    //             var engineerId = row.getCell(1).value;
+    //             if (!engineerId) return;
+    //             aAllRows.push({ engineerId: String(engineerId) });
+    //         });
+    //         if (aAllRows.length === 0) return Promise.reject(new Error("NO_ROWS"));
+    //         return aAllRows;
+    //     });
+    // }
     // Both flows now get the same radio choice (chunk vs. no-chunk)
     var openNodeJsUploadDialog = createUploadFlow("excelUploadFragment", "uploadProfileChunk", "");
     var openProcedureUploadDialog = createUploadFlow("excelUploadFragmentProc", "uploadProfileChunkViaProcedure", "[Procedure] ");

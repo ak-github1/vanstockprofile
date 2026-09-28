@@ -7,39 +7,45 @@ using from '../db/uploadlog';
 service VanStockProfile {
     entity VanStockProfile as projection on vanstock.VanStockProfiles;
     entity UploadLog       as projection on vanstock.UploadLogs;
+
     @odata.draft.enabled
     entity ProfileHeader   as projection on vanstock.VanStockProfileHeader;
+
     entity ProfileLine     as projection on vanstock.VanStockProfileLine;
     entity ChangeLog       as projection on vanstock.ChangeLogs;
     entity ArchiveHeader   as projection on vanstock.ArchiveHeaders;
     entity ArchiveLine     as projection on vanstock.ArchiveLines;
 
-    action processReturn(
-        engineerId: String, partNumber: String, quantity: Decimal
-    ) returns { message: String };
+    action processReturn(engineerId: String, partNumber: String, quantity: Decimal)          returns {
+        message : String
+    };
 
-    action processLeaver(engineerId: String) returns { message: String };
-    
-    action uploadProfile(file: LargeBinary, mimetype: String)         returns {
+    action processLeaver(engineerId: String)                                                 returns {
+        message : String
+    };
+
+    action uploadProfile(file: LargeBinary, mimetype: String, uploadedOn: Timestamp)         returns {
         message      : String;
         totalRows    : Integer;
         successCount : Integer;
         failCount    : Integer;
+        uploadedOn   : Timestamp;
     };
 
-    action uploadProfileFull(file: LargeBinary, mimetype: String)     returns {
+    action uploadProfileFull(file: LargeBinary, mimetype: String, uploadedOn: Timestamp)     returns {
         message      : String;
         totalRows    : Integer;
         successCount : Integer;
         failCount    : Integer;
+        uploadedOn   : Timestamp;
     };
 
-    action postProfiles(logIds: array of UUID)                        returns {
+    action postProfiles(logIds: array of UUID)                                               returns {
         message     : String;
         postedCount : Integer;
     };
 
-    action postAllProfiles()                                          returns {
+    action postAllProfiles()                                                                 returns {
         message     : String;
         postedCount : Integer;
     };
@@ -53,35 +59,40 @@ service VanStockProfile {
         value        : Decimal(15, 2);
     };
 
-    action uploadProfileChunk(rows: array of VanStockRow)             returns {
+    action uploadProfileChunk(rows: array of VanStockRow, uploadedOn: Timestamp)             returns {
         successCount : Integer;
         failCount    : Integer;
+        uploadedOn   : Timestamp;
     };
 
     //Procedural
-    action uploadProfileChunkViaProcedure(rows: array of VanStockRow) returns {
+    action uploadProfileChunkViaProcedure(rows: array of VanStockRow, uploadedOn: Timestamp) returns {
         successCount : Integer;
         failCount    : Integer;
+        uploadedOn   : Timestamp;
     };
-type ReturnRow {
-    engineerId : String(20);
-    partNumber : String(40);
-    quantity   : Decimal(13, 3);
-};
 
-type LeaverRow {
-    engineerId : String(20);
-};
+    type ReturnRow {
+        engineerId : String(20);
+        partNumber : String(40);
+        quantity   : Decimal(13, 3);
+    };
 
-action processReturnBulk(rows: array of ReturnRow) returns {
-    successCount : Integer;
-    failCount    : Integer;
-    errors       : array of String;
-};
+    type LeaverRow {
+        engineerId : String(20);
+    };
 
-action processLeaverBulk(rows: array of LeaverRow) returns {
-    successCount : Integer;
-    failCount    : Integer;
-    errors       : array of String;
-};
+    action processReturnBulk(rows: array of VanStockRow, uploadedOn: Timestamp)              returns {
+        successCount : Integer;
+        failCount    : Integer;
+        errors       : array of String;
+        uploadedOn   : Timestamp;
+    };
+
+    action processLeaverBulk(rows: array of VanStockRow, uploadedOn: Timestamp)              returns {
+        successCount : Integer;
+        failCount    : Integer;
+        errors       : array of String;
+        uploadedOn   : Timestamp;
+    };
 };
