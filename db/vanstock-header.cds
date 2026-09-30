@@ -1,6 +1,6 @@
 namespace vanstock;
-
-entity VanStockProfileHeader {
+using { managed } from '@sap/cds/common';
+entity VanStockProfileHeader : managed {
     key ID           : UUID;
         engineerId   : String(20);
         businessUnit : String(10);
@@ -19,3 +19,6 @@ entity VanStockProfileLine {
         baseUOM       : String(3);
         value         : Decimal(15,2);
 }
+annotate VanStockProfileHeader with {
+modifiedAt @odata.etag;
+};
